@@ -68,14 +68,8 @@ void Player::Update(uint32 p_time)
         m_nextMailDelivereTime = time_t(0);
     }
 
-    // Update cinematic location, if 500ms have passed and we're doing a
-    // cinematic now.
-    _cinematicMgr->m_cinematicDiff += p_time;
-    if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
-    {
-        _cinematicMgr->m_lastCinematicCheck = getMSTime();
-        _cinematicMgr->UpdateCinematicLocation(p_time);
-    }
+    // Update cinematic camera (if needed)
+    _cinematicMgr.UpdateCinematic(p_time);
 
     // used to implement delayed far teleports
     SetMustDelayTeleport(true);
@@ -396,13 +390,11 @@ void Player::Update(uint32 p_time)
         // != GetCharmGUID())))
         RemovePet(pet, PET_SAVE_NOT_IN_SLOT, true);
 
-    // pussywizard:
     if (m_hostileReferenceCheckTimer <= p_time)
     {
         m_hostileReferenceCheckTimer = 15000;
         if (!GetMap()->IsDungeon())
-            getHostileRefMgr().deleteReferencesOutOfRange(
-                GetVisibilityRange());
+            GetCombatManager().EndCombatBeyondRange(GetVisibilityRange(), true);
     }
     else
         m_hostileReferenceCheckTimer -= p_time;
@@ -1289,13 +1281,9 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
         return;
 
     if (sWorld->getBoolConfig(CONFIG_WEATHER))
-    {
-        if (Weather* weather = WeatherMgr::FindWeather(zone->ID))
-            weather->SendWeatherUpdateToPlayer(this);
-        else if (!WeatherMgr::AddWeather(zone->ID))
-            // send fine weather packet to remove old zone's weather
-            WeatherMgr::SendFineWeatherUpdateToPlayer(this);
-    }
+        GetMap()->GetOrGenerateZoneDefaultWeather(newZone);
+
+    GetMap()->SendZoneDynamicInfo(newZone, this);
 
     sScriptMgr->OnPlayerUpdateZone(this, newZone, newArea);
 
@@ -1598,21 +1586,12 @@ void Player::UpdateVisibilityForPlayer(bool mapChange)
     // After added to map seer must be a player - there is no possibility to
     // still have different seer (all charm auras must be already removed)
     if (mapChange && m_seer != this)
-    {
         m_seer = this;
-    }
 
-    Acore::VisibleNotifier notifierNoLarge(
-        *this, mapChange,
-        false); // visit only objects which are not large; default distance
-    Cell::VisitObjects(m_seer, notifierNoLarge,
-                          GetSightRange() + VISIBILITY_INC_FOR_GOBJECTS);
-    notifierNoLarge.SendToSelf();
-
-    Acore::VisibleNotifier notifierLarge(
-        *this, mapChange, true); // visit only large objects; maximum distance
-    Cell::VisitObjects(m_seer, notifierLarge, GetSightRange());
-    notifierLarge.SendToSelf();
+    Acore::VisibleNotifier notifier(*this, mapChange);
+    Cell::VisitObjects(GetSightPosition().GetPositionX(), GetSightPosition().GetPositionY(), GetMap(), notifier, GetSightRange());
+    Cell::VisitFarVisibleObjects(GetSightPosition().GetPositionX(), GetSightPosition().GetPositionY(), GetMap(), notifier, VISIBILITY_DISTANCE_GIGANTIC);
+    notifier.SendToSelf();
 
     if (mapChange)
         m_last_notify_position.Relocate(-5000.0f, -5000.0f, -5000.0f, 0.0f);
